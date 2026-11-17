@@ -6,7 +6,9 @@
 ##
 ##   features   = graph nodes (per-cell copy number of the node's interval) and ALT edges (per-cell junction read rate)
 ##   R          = Spearman correlation of the features across cells
-##   walk score = |F_w| * mean_{i<j in F_w} (R_ij - tau)   (F_w = distinct features on walk w; 0 for walks with < 2 features)
+##   walk score = |F_w| * mean_{i<j in F_w} (R_ij - tau) - lambda * repeats_w
+##                (F_w = distinct features on walk w, 0 for < 2 features; repeats_w = node visits beyond the first, so multimers of one
+##                circle are not preferred over the monomer copies)
 ##   wiring     = sum of walk scores over all walk copies of the wiring
 ##
 ## and runs simulated annealing (then a Metropolis chain at the final temperature) over wirings with the same move as local.sampling()
@@ -79,13 +81,14 @@ sc_feature_cor = function(node_cn, edge_reads = NULL, depth = NULL, min_cells = 
 #' @param walks list(snode.id = list of signed node vectors, circular = logical)
 #' @return numeric vector of walk scores
 #' @export
-sc_score_walks = function(walks, R, et, tau = 0.5) {
+sc_score_walks = function(walks, R, et, tau = 0.5, lambda = 0.1) {
   fn = colnames(R)
   vapply(seq_along(walks$snode.id), function(i) {
-    f = intersect(.sc_walk_features(walks$snode.id[[i]], walks$circular[i], et), fn)
-    if (length(f) < 2) return(0)
+    sn = walks$snode.id[[i]]; rep = length(sn) - length(unique(abs(sn)))
+    f = intersect(.sc_walk_features(sn, walks$circular[i], et), fn)
+    if (length(f) < 2) return(-lambda * rep)
     r = R[f, f, drop = FALSE]
-    length(f) * (mean(r[upper.tri(r)]) - tau)
+    length(f) * (mean(r[upper.tri(r)]) - tau) - lambda * rep
   }, 0)
 }
 
@@ -94,13 +97,14 @@ sc_score_walks = function(walks, R, et, tau = 0.5) {
 #' @param gg balanced integer gGraph (as for sample.gwalks)
 #' @param R feature correlation matrix (sc_feature_cor()$R)
 #' @param tau correlation level that counts as "same molecule" (pairs below it lower the score)
+#' @param lambda penalty per repeated node visit within a walk
 #' @param nsteps annealing steps; nsample further steps at the final temperature, recorded every thin steps
 #' @param T0,T1 start and end temperature (score units)
 #' @param restarts independent chains (each from a uniform random wiring)
 #' @param mc.cores cores over restarts
 #' @return list(best = list(score, walks), samples = data.table(chain, step, score, walk, wkey, circular), chains = per-chain traces)
 #' @export
-sc_sample_gwalks = function(gg, R, tau = 0.5, nsteps = 5000, nsample = 2000, thin = 20, T0 = 5, T1 = 0.05, restarts = 4,
+sc_sample_gwalks = function(gg, R, tau = 0.5, lambda = 0.1, nsteps = 5000, nsample = 2000, thin = 20, T0 = 5, T1 = 0.05, restarts = 4,
                             mc.cores = 1, seed = 1, frozen.nodes = NULL) {
   wiring = gg.to.wiring(gg); et = .sc_edge_table(wiring$gg)
   chain = function(r) {
@@ -110,13 +114,13 @@ sc_sample_gwalks = function(gg, R, tau = 0.5, nsteps = 5000, nsample = 2000, thi
     pivots = setdiff(st$n[which(st$cn > 1)], frozen.nodes)
     prow = lapply(pivots, function(p) .wiring_rows(st, p))
     right = st$right
-    w = .wiring_traverse(st, right); s = sum(sc_score_walks(w, R, et, tau))
+    w = .wiring_traverse(st, right); s = sum(sc_score_walks(w, R, et, tau, lambda))
     best = list(score = s, walks = w); trace = numeric(nsteps + nsample); rec = list()
     temps = c(exp(seq(log(T0), log(T1), length.out = max(nsteps, 1))), rep(T1, nsample))
     for (j in seq_along(temps)) {
       if (!length(pivots)) break
       k = sample.int(length(pivots), 1); r2 = .wiring_swap(right, prow[[k]])
-      w2 = .wiring_traverse(st, r2); s2 = sum(sc_score_walks(w2, R, et, tau))
+      w2 = .wiring_traverse(st, r2); s2 = sum(sc_score_walks(w2, R, et, tau, lambda))
       if (s2 >= s || stats::runif(1) < exp((s2 - s) / temps[j])) { right = r2; s = s2; w = w2 }
       if (s > best$score) best = list(score = s, walks = w)
       trace[j] = s

@@ -55,3 +55,10 @@ test_that("sc_walk_freq counts states and copies", {
   f <- sc_walk_freq(s)
   expect_equal(f[wkey == "1,3,4"]$mean_copies, 2); expect_equal(f[wkey == "2,3,5"]$freq, 0.5)
 })
+
+test_that("multimers of one circle score below the monomer copies", {
+  skip_if_no_loosefix()
+  gg <- sc_toy_graph(); R <- sc_feature_cor(sc_toy_cells())$R; et <- fastKar:::.sc_edge_table(gg.to.wiring(gg)$gg)
+  mono <- list(snode.id = list(3L, 3L), circular = c(TRUE, TRUE)); multi <- list(snode.id = list(c(3L, 3L)), circular = TRUE)
+  expect_gt(sum(sc_score_walks(mono, R, et)), sum(sc_score_walks(multi, R, et)))
+})
